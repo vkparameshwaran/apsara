@@ -36,8 +36,11 @@ def get_github_metrics(repo_name, token=None):
             'last_commit': None
         })
         
-        # Get commits and track by author
-        commits = repo.get_commits()
+        # Get all commits
+        commits = list(repo.get_commits())
+        total_commits = len(commits)
+        
+        # Process each commit
         for commit in commits:
             author = commit.author.login if commit.author else "Unknown"
             commit_date = commit.commit.author.date.date()
@@ -67,9 +70,31 @@ def get_github_metrics(repo_name, token=None):
                 print(f"Error processing files in commit: {str(e)}")
                 continue
         
+        # Get current state of files
+        try:
+            contents = repo.get_contents("")
+            while contents:
+                file_content = contents.pop(0)
+                if file_content.type == "dir":
+                    contents.extend(repo.get_contents(file_content.path))
+                elif file_content.type == "file":
+                    try:
+                        content = repo.get_contents(file_content.path)
+                        if content:
+                            # Get the last commit that modified this file
+                            commits = list(repo.get_commits(path=file_content.path))
+                            if commits:
+                                author = commits[0].author.login if commits[0].author else "Unknown"
+                                lines = len(content.decoded_content.decode().split('\n'))
+                                dev_metrics[author]['lines_of_code'] = max(dev_metrics[author]['lines_of_code'], lines)
+                    except Exception as e:
+                        print(f"Error processing file {file_content.path}: {str(e)}")
+                        continue
+        except Exception as e:
+            print(f"Error getting repository contents: {str(e)}")
+        
         # Print team-wide metrics
         total_lines = sum(metrics['lines_of_code'] for metrics in dev_metrics.values())
-        total_commits = sum(metrics['commits'] for metrics in dev_metrics.values())
         all_coding_days = set()
         for metrics in dev_metrics.values():
             all_coding_days.update(metrics['coding_days'])
