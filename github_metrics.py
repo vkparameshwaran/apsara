@@ -42,7 +42,15 @@ def get_github_metrics(repo_name, token=None):
         
         # Process each commit
         for commit in commits:
-            author = commit.author.login if commit.author else "Unknown"
+            # Get author information with fallback options
+            author = None
+            if commit.author:
+                author = commit.author.login
+            elif commit.commit.author:
+                author = commit.commit.author.name
+            else:
+                author = "Unknown"
+            
             commit_date = commit.commit.author.date.date()
             
             # Update commit metrics
@@ -84,7 +92,15 @@ def get_github_metrics(repo_name, token=None):
                             # Get the last commit that modified this file
                             commits = list(repo.get_commits(path=file_content.path))
                             if commits:
-                                author = commits[0].author.login if commits[0].author else "Unknown"
+                                # Get author information with fallback options
+                                author = None
+                                if commits[0].author:
+                                    author = commits[0].author.login
+                                elif commits[0].commit.author:
+                                    author = commits[0].commit.author.name
+                                else:
+                                    author = "Unknown"
+                                
                                 lines = len(content.decoded_content.decode().split('\n'))
                                 dev_metrics[author]['lines_of_code'] = max(dev_metrics[author]['lines_of_code'], lines)
                     except Exception as e:
