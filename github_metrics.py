@@ -148,49 +148,76 @@ def get_github_metrics(repo_name, token=None):
                 print(f"Error processing branch {branch.name}: {str(e)}")
                 continue
         
-        # Print team-wide metrics
-        total_lines_added = sum(metrics['lines_added'] for metrics in dev_metrics.values())
-        total_lines_removed = sum(metrics['lines_removed'] for metrics in dev_metrics.values())
-        all_coding_days = set()
-        for metrics in dev_metrics.values():
-            all_coding_days.update(metrics['coding_days'])
+        # Create output directory if it doesn't exist
+        output_dir = "metrics_output"
+        os.makedirs(output_dir, exist_ok=True)
         
-        print(f"\nTeam Metrics for repository: {repo_name} (Last 7 days)")
-        print(f"Total lines of code added: {total_lines_added}")
-        print(f"Total lines of code removed: {total_lines_removed}")
-        print(f"Net lines changed: {total_lines_added - total_lines_removed}")
-        print(f"Total commits: {sum(metrics['commits'] for metrics in dev_metrics.values())}")
-        print(f"Total coding days: {len(all_coding_days)}")
-        print(f"Number of active developers: {len(dev_metrics)}")
+        # Create team metrics DataFrame
+        team_data = {
+            'Metric': [
+                'Total Lines Added',
+                'Total Lines Removed',
+                'Net Lines Changed',
+                'Total Commits',
+                'Total Coding Days',
+                'Active Developers'
+            ],
+            'Value': [
+                sum(metrics['lines_added'] for metrics in dev_metrics.values()),
+                sum(metrics['lines_removed'] for metrics in dev_metrics.values()),
+                sum(metrics['lines_added'] - metrics['lines_removed'] for metrics in dev_metrics.values()),
+                sum(metrics['commits'] for metrics in dev_metrics.values()),
+                len(set().union(*(metrics['coding_days'] for metrics in dev_metrics.values()))),
+                len(dev_metrics)
+            ]
+        }
+        team_df = pd.DataFrame(team_data)
         
-        # Print individual developer metrics
-        print("\nIndividual Developer Metrics (Last 7 days):")
+        # Create developer metrics DataFrame
+        dev_data = []
         for author, metrics in dev_metrics.items():
-            print(f"\nDeveloper: {author}")
-            print(f"Lines of code added: {metrics['lines_added']}")
-            print(f"Lines of code removed: {metrics['lines_removed']}")
-            print(f"Net lines changed: {metrics['lines_added'] - metrics['lines_removed']}")
-            print(f"Total commits: {metrics['commits']}")
-            print(f"PR branch commits: {metrics['pr_branch_commits']}")
-            print(f"Master branch commits: {metrics['master_commits']}")
-            print(f"Coding days: {len(metrics['coding_days'])}")
-            print(f"Files changed: {len(metrics['files_changed'])}")
+            activity_days = (metrics['last_commit'] - metrics['first_commit']).days + 1 if metrics['first_commit'] and metrics['last_commit'] else 0
+            avg_commits = metrics['commits'] / activity_days if activity_days > 0 else 0
             
-            # Calculate average commits per day based on activity period
-            if metrics['first_commit'] and metrics['last_commit']:
-                activity_days = (metrics['last_commit'] - metrics['first_commit']).days + 1
-                avg_commits = metrics['commits'] / activity_days
-                print(f"Average commits per day: {avg_commits:.2f}")
-                print(f"Activity period: {metrics['first_commit']} to {metrics['last_commit']} ({activity_days} days)")
-            else:
-                print("Average commits per day: N/A")
-            
-            # Print daily activity for the last week
-            print("Daily activity:")
+            dev_data.append({
+                'Developer': author,
+                'Lines Added': metrics['lines_added'],
+                'Lines Removed': metrics['lines_removed'],
+                'Net Lines Changed': metrics['lines_added'] - metrics['lines_removed'],
+                'Total Commits': metrics['commits'],
+                'PR Branch Commits': metrics['pr_branch_commits'],
+                'Master Commits': metrics['master_commits'],
+                'Coding Days': len(metrics['coding_days']),
+                'Files Changed': len(metrics['files_changed']),
+                'Avg Commits/Day': f"{avg_commits:.2f}",
+                'Activity Period': f"{metrics['first_commit']} to {metrics['last_commit']}" if metrics['first_commit'] and metrics['last_commit'] else "N/A"
+            })
+        
+        dev_df = pd.DataFrame(dev_data)
+        
+        # Create daily activity DataFrame
+        daily_data = []
+        for author, metrics in dev_metrics.items():
             for i in range(7):
                 date = (end_date - timedelta(days=i)).date()
                 commits = metrics['commits_per_day'].get(date, 0)
-                print(f"  {date}: {commits} commits")
+                daily_data.append({
+                    'Developer': author,
+                    'Date': date,
+                    'Commits': commits
+                })
+        daily_df = pd.DataFrame(daily_data)
+        
+        # Save DataFrames to CSV files
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        team_df.to_csv(f"{output_dir}/team_metrics_{timestamp}.csv", index=False)
+        dev_df.to_csv(f"{output_dir}/developer_metrics_{timestamp}.csv", index=False)
+        daily_df.to_csv(f"{output_dir}/daily_activity_{timestamp}.csv", index=False)
+        
+        print(f"\nMetrics have been saved to CSV files in the '{output_dir}' directory:")
+        print(f"- team_metrics_{timestamp}.csv")
+        print(f"- developer_metrics_{timestamp}.csv")
+        print(f"- daily_activity_{timestamp}.csv")
         
     except Exception as e:
         print(f"Error: {str(e)}")
