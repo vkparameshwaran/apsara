@@ -1,5 +1,5 @@
 from github import Github
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 from dotenv import load_dotenv
 from collections import defaultdict
@@ -9,6 +9,41 @@ import json
 
 # Load environment variables
 load_dotenv()
+
+def get_branches(repo, start_date, end_date):
+    """Get all branches in the repository created in the last 90 days."""
+    try:
+        # Calculate the date 90 days before the end date
+        ninety_days_ago = end_date - timedelta(days=90)
+        
+        # Ensure both dates are timezone-aware
+        if ninety_days_ago.tzinfo is None:
+            ninety_days_ago = ninety_days_ago.replace(tzinfo=timezone.utc)
+        
+        # Get all branches
+        branches = []
+        for branch in repo.get_branches():
+            # Get the first commit of the branch to determine creation date
+            try:
+                first_commit = branch.commit
+                commit_date = first_commit.commit.author.date
+                
+                # Ensure commit date is timezone-aware
+                if commit_date.tzinfo is None:
+                    commit_date = commit_date.replace(tzinfo=timezone.utc)
+                
+                # Only include branches created in the last 90 days
+                if commit_date >= ninety_days_ago:
+                    branches.append(branch.name)
+            except Exception as e:
+                print(f"Warning: Could not get commit date for branch {branch.name}: {str(e)}")
+                continue
+        
+        print(f"Found {len(branches)} branches created in the last 90 days")
+        return branches
+    except Exception as e:
+        print(f"Error getting branches: {str(e)}")
+        return []
 
 def get_github_metrics(repo_name, token=None):
     """
@@ -78,75 +113,89 @@ def get_github_metrics(repo_name, token=None):
         })
         
         # Calculate date range for last week
-        end_date = datetime.now()
+        end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=7)
-        print(f"\nAnalyzing metrics from {start_date.date()} to {end_date.date()}")
+        print(f"\nAnalyzing metrics from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
         
-        # Get all branches
-        try:
-            branches = list(repo.get_branches())
-            print(f"Found {len(branches)} branches")
-        except Exception as e:
-            print(f"Error getting branches: {str(e)}")
-            sys.exit(1)
+        # Get branches created in the last 90 days
+        branches = get_branches(repo, start_date, end_date)
+        
+        # Create a mapping of commit SHA to branch name
+        commit_branch_map = {}
+        for branch_name in branches:
+            try:
+                branch = repo.get_branch(branch_name)
+                commits = repo.get_commits(sha=branch.commit.sha, since=start_date, until=end_date)
+                for commit in commits:
+                    commit_branch_map[commit.sha] = branch_name
+            except Exception as e:
+                print(f"Warning: Could not get commits for branch {branch_name}: {str(e)}")
+                continue
+        
+        # Get all commits across all branches
+        all_commits = []
+        for branch_name in branches:
+            try:
+                commits = repo.get_commits(sha=branch_name, since=start_date, until=end_date)
+                all_commits.extend(commits)
+            except Exception as e:
+                print(f"Warning: Could not get commits for branch {branch_name}: {str(e)}")
+                continue
+        
+        print(f"Found {len(all_commits)} commits in the specified date range")
         
         # Process commits from each branch
-        for branch in branches:
-            try:
-                commits = list(repo.get_commits(sha=branch.commit.sha, since=start_date))
-                for commit in commits:
-                    # Get author information with fallback options
-                    author = None
-                    if commit.author:
-                        author = commit.author.login
-                    elif commit.commit.author:
-                        author = commit.commit.author.name
-                    else:
-                        author = "Unknown"
-                    
-                    commit_date = commit.commit.author.date.date()
-                    
-                    # Only process commits from the last week
-                    if commit_date >= start_date.date():
-                        # Update commit metrics
-                        dev_metrics[author]['commits'] += 1
-                        dev_metrics[author]['coding_days'].add(commit_date)
-                        dev_metrics[author]['commits_per_day'][commit_date] += 1
-                        
-                        # Track PR branch vs master commits
-                        if branch.name == 'master':
-                            dev_metrics[author]['master_commits'] += 1
-                            dev_metrics[author]['master_days'].add(commit_date)
-                        else:
-                            dev_metrics[author]['pr_branch_commits'] += 1
-                            dev_metrics[author]['pr_branch_days'].add(commit_date)
-                        
-                        # Update first and last commit dates
-                        if not dev_metrics[author]['first_commit'] or commit_date < dev_metrics[author]['first_commit']:
-                            dev_metrics[author]['first_commit'] = commit_date
-                        if not dev_metrics[author]['last_commit'] or commit_date > dev_metrics[author]['last_commit']:
-                            dev_metrics[author]['last_commit'] = commit_date
-                        
-                        # Get files changed in this commit
-                        try:
-                            files = commit.files
-                            for file in files:
-                                # Skip image files
-                                if file.filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-                                    continue
-                                    
-                                dev_metrics[author]['files_changed'].add(file.filename)
-                                # Count lines added and removed for this file
-                                if file.additions is not None:
-                                    dev_metrics[author]['lines_added'] += file.additions
-                                if file.deletions is not None:
-                                    dev_metrics[author]['lines_removed'] += file.deletions
-                        except Exception as e:
-                            print(f"Error processing files in commit: {str(e)}")
+        for commit in all_commits:
+            # Get author information with fallback options
+            author = None
+            if commit.author:
+                author = commit.author.login
+            elif commit.commit.author:
+                author = commit.commit.author.name
+            else:
+                author = "Unknown"
+            
+            commit_date = commit.commit.author.date.date()
+            
+            # Only process commits from the last week
+            if commit_date >= start_date.date():
+                # Update commit metrics
+                dev_metrics[author]['commits'] += 1
+                dev_metrics[author]['coding_days'].add(commit_date)
+                dev_metrics[author]['commits_per_day'][commit_date] += 1
+                
+                # Track PR branch vs master commits
+                branch_name = commit_branch_map.get(commit.sha, 'Unknown')
+                if branch_name == 'master':
+                    dev_metrics[author]['master_commits'] += 1
+                    dev_metrics[author]['master_days'].add(commit_date)
+                else:
+                    dev_metrics[author]['pr_branch_commits'] += 1
+                    dev_metrics[author]['pr_branch_days'].add(commit_date)
+                
+                # Update first and last commit dates
+                if not dev_metrics[author]['first_commit'] or commit_date < dev_metrics[author]['first_commit']:
+                    dev_metrics[author]['first_commit'] = commit_date
+                if not dev_metrics[author]['last_commit'] or commit_date > dev_metrics[author]['last_commit']:
+                    dev_metrics[author]['last_commit'] = commit_date
+                
+                # Get files changed in this commit
+                try:
+                    files = commit.files
+                    for file in files:
+                        # Skip image files
+                        if file.filename.lower().endswith(('.png', '.jpg', '.jpeg')):
                             continue
-            except Exception as e:
-                print(f"Error processing branch {branch.name}: {str(e)}")
-                continue
+                            
+                        dev_metrics[author]['files_changed'].add(file.filename)
+                        # Count lines added and removed for this file
+                        if file.additions is not None:
+                            dev_metrics[author]['lines_added'] += file.additions
+                        if file.deletions is not None:
+                            dev_metrics[author]['lines_removed'] += file.deletions
+                except Exception as e:
+                    print(f"Error processing files in commit: {str(e)}")
+                    continue
         
         # Create output directory if it doesn't exist
         output_dir = "metrics_output"
