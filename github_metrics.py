@@ -70,7 +70,11 @@ def get_github_metrics(repo_name, token=None):
             'commits_per_day': defaultdict(int),
             'files_changed': set(),
             'first_commit': None,
-            'last_commit': None
+            'last_commit': None,
+            'pr_branch_commits': 0,  # Commits in PR branches
+            'pr_branch_days': set(),  # Days with PR branch activity
+            'master_commits': 0,      # Commits in master
+            'master_days': set()      # Days with master activity
         })
         
         # Calculate date range for last week
@@ -78,58 +82,71 @@ def get_github_metrics(repo_name, token=None):
         start_date = end_date - timedelta(days=7)
         print(f"\nAnalyzing metrics from {start_date.date()} to {end_date.date()}")
         
-        # Get all commits
+        # Get all branches
         try:
-            commits = list(repo.get_commits(since=start_date))
-            total_commits = len(commits)
-            print(f"Found {total_commits} commits in the last week")
+            branches = list(repo.get_branches())
+            print(f"Found {len(branches)} branches")
         except Exception as e:
-            print(f"Error getting commits: {str(e)}")
+            print(f"Error getting branches: {str(e)}")
             sys.exit(1)
         
-        # Process each commit
-        for commit in commits:
-            # Get author information with fallback options
-            author = None
-            if commit.author:
-                author = commit.author.login
-            elif commit.commit.author:
-                author = commit.commit.author.name
-            else:
-                author = "Unknown"
-            
-            commit_date = commit.commit.author.date.date()
-            
-            # Only process commits from the last week
-            if commit_date >= start_date.date():
-                # Update commit metrics
-                dev_metrics[author]['commits'] += 1
-                dev_metrics[author]['coding_days'].add(commit_date)
-                dev_metrics[author]['commits_per_day'][commit_date] += 1
-                
-                # Update first and last commit dates
-                if not dev_metrics[author]['first_commit'] or commit_date < dev_metrics[author]['first_commit']:
-                    dev_metrics[author]['first_commit'] = commit_date
-                if not dev_metrics[author]['last_commit'] or commit_date > dev_metrics[author]['last_commit']:
-                    dev_metrics[author]['last_commit'] = commit_date
-                
-                # Get files changed in this commit
-                try:
-                    files = commit.files
-                    for file in files:
-                        # Skip image files
-                        if file.filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+        # Process commits from each branch
+        for branch in branches:
+            try:
+                commits = list(repo.get_commits(sha=branch.commit.sha, since=start_date))
+                for commit in commits:
+                    # Get author information with fallback options
+                    author = None
+                    if commit.author:
+                        author = commit.author.login
+                    elif commit.commit.author:
+                        author = commit.commit.author.name
+                    else:
+                        author = "Unknown"
+                    
+                    commit_date = commit.commit.author.date.date()
+                    
+                    # Only process commits from the last week
+                    if commit_date >= start_date.date():
+                        # Update commit metrics
+                        dev_metrics[author]['commits'] += 1
+                        dev_metrics[author]['coding_days'].add(commit_date)
+                        dev_metrics[author]['commits_per_day'][commit_date] += 1
+                        
+                        # Track PR branch vs master commits
+                        if branch.name == 'master':
+                            dev_metrics[author]['master_commits'] += 1
+                            dev_metrics[author]['master_days'].add(commit_date)
+                        else:
+                            dev_metrics[author]['pr_branch_commits'] += 1
+                            dev_metrics[author]['pr_branch_days'].add(commit_date)
+                        
+                        # Update first and last commit dates
+                        if not dev_metrics[author]['first_commit'] or commit_date < dev_metrics[author]['first_commit']:
+                            dev_metrics[author]['first_commit'] = commit_date
+                        if not dev_metrics[author]['last_commit'] or commit_date > dev_metrics[author]['last_commit']:
+                            dev_metrics[author]['last_commit'] = commit_date
+                        
+                        # Get files changed in this commit
+                        try:
+                            files = commit.files
+                            for file in files:
+                                # Skip image files
+                                if file.filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                                    continue
+                                    
+                                dev_metrics[author]['files_changed'].add(file.filename)
+                                # Count lines added and removed for this file
+                                if file.additions is not None:
+                                    dev_metrics[author]['lines_added'] += file.additions
+                                if file.deletions is not None:
+                                    dev_metrics[author]['lines_removed'] += file.deletions
+                        except Exception as e:
+                            print(f"Error processing files in commit: {str(e)}")
                             continue
-                            
-                        dev_metrics[author]['files_changed'].add(file.filename)
-                        # Count lines added and removed for this file
-                        if file.additions is not None:
-                            dev_metrics[author]['lines_added'] += file.additions
-                        if file.deletions is not None:
-                            dev_metrics[author]['lines_removed'] += file.deletions
-                except Exception as e:
-                    print(f"Error processing files in commit: {str(e)}")
-                    continue
+            except Exception as e:
+                print(f"Error processing branch {branch.name}: {str(e)}")
+                continue
         
         # Print team-wide metrics
         total_lines_added = sum(metrics['lines_added'] for metrics in dev_metrics.values())
@@ -142,7 +159,7 @@ def get_github_metrics(repo_name, token=None):
         print(f"Total lines of code added: {total_lines_added}")
         print(f"Total lines of code removed: {total_lines_removed}")
         print(f"Net lines changed: {total_lines_added - total_lines_removed}")
-        print(f"Total commits: {total_commits}")
+        print(f"Total commits: {sum(metrics['commits'] for metrics in dev_metrics.values())}")
         print(f"Total coding days: {len(all_coding_days)}")
         print(f"Number of active developers: {len(dev_metrics)}")
         
@@ -154,17 +171,19 @@ def get_github_metrics(repo_name, token=None):
             print(f"Lines of code removed: {metrics['lines_removed']}")
             print(f"Net lines changed: {metrics['lines_added'] - metrics['lines_removed']}")
             print(f"Total commits: {metrics['commits']}")
+            print(f"PR branch commits: {metrics['pr_branch_commits']}")
+            print(f"Master branch commits: {metrics['master_commits']}")
             print(f"Coding days: {len(metrics['coding_days'])}")
             print(f"Files changed: {len(metrics['files_changed'])}")
             
-            # Calculate average commits per day
-            if metrics['commits_per_day']:
-                avg_commits = sum(metrics['commits_per_day'].values()) / len(metrics['commits_per_day'])
-                print(f"Average commits per day: {avg_commits:.2f}")
-            
-            # Print activity period
+            # Calculate average commits per day based on activity period
             if metrics['first_commit'] and metrics['last_commit']:
-                print(f"Activity period: {metrics['first_commit']} to {metrics['last_commit']}")
+                activity_days = (metrics['last_commit'] - metrics['first_commit']).days + 1
+                avg_commits = metrics['commits'] / activity_days
+                print(f"Average commits per day: {avg_commits:.2f}")
+                print(f"Activity period: {metrics['first_commit']} to {metrics['last_commit']} ({activity_days} days)")
+            else:
+                print("Average commits per day: N/A")
             
             # Print daily activity for the last week
             print("Daily activity:")
