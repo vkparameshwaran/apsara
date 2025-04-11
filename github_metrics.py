@@ -58,27 +58,14 @@ def get_github_metrics(repo_name, token=None):
                 files = commit.files
                 for file in files:
                     dev_metrics[author]['files_changed'].add(file.filename)
-            except:
+                    # Count lines added and removed for this file
+                    if file.additions is not None:
+                        dev_metrics[author]['lines_of_code'] += file.additions
+                    if file.deletions is not None:
+                        dev_metrics[author]['lines_of_code'] -= file.deletions
+            except Exception as e:
+                print(f"Error processing files in commit: {str(e)}")
                 continue
-        
-        # Get total lines of code and track by author
-        contents = repo.get_contents("")
-        while contents:
-            file_content = contents.pop(0)
-            if file_content.type == "dir":
-                contents.extend(repo.get_contents(file_content.path))
-            else:
-                if file_content.type == "file":
-                    try:
-                        content = repo.get_contents(file_content.path)
-                        if content:
-                            # Get file history to track author contributions
-                            commits = repo.get_commits(path=file_content.path)
-                            for commit in commits:
-                                author = commit.author.login if commit.author else "Unknown"
-                                dev_metrics[author]['lines_of_code'] += len(content.decoded_content.decode().split('\n'))
-                    except:
-                        continue
         
         # Print team-wide metrics
         total_lines = sum(metrics['lines_of_code'] for metrics in dev_metrics.values())
