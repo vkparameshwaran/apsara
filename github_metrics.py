@@ -116,6 +116,10 @@ def get_github_metrics(repo_name, token=None):
                 try:
                     files = commit.files
                     for file in files:
+                        # Skip image files
+                        if file.filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                            continue
+                            
                         dev_metrics[author]['files_changed'].add(file.filename)
                         # Count lines added and removed for this file
                         if file.additions is not None:
