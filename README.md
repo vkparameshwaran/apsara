@@ -5,6 +5,7 @@ This script fetches various metrics from a GitHub repository including:
 - Average commits per day
 - Total coding days
 - Commits per day for the last 7 days
+- Test commit
 
 ## Setup
 
