@@ -20,24 +20,49 @@ def get_branches(repo, start_date, end_date):
         if ninety_days_ago.tzinfo is None:
             ninety_days_ago = ninety_days_ago.replace(tzinfo=timezone.utc)
         
-        # Get all branches
+        # Get branches using pagination
         branches = []
-        for branch in repo.get_branches():
-            # Get the first commit of the branch to determine creation date
+        page = 1
+        per_page = 100  # Maximum allowed by GitHub API
+        
+        while True:
+            # Get a page of branches
             try:
-                first_commit = branch.commit
-                commit_date = first_commit.commit.author.date
+                branch_page = list(repo.get_branches().get_page(page))
+                if not branch_page:
+                    break
                 
-                # Ensure commit date is timezone-aware
-                if commit_date.tzinfo is None:
-                    commit_date = commit_date.replace(tzinfo=timezone.utc)
+                for branch in branch_page:
+                    try:
+                        # Get the first commit of the branch
+                        first_commit = branch.commit
+                        commit_date = first_commit.commit.author.date
+                        
+                        # Ensure commit date is timezone-aware
+                        if commit_date.tzinfo is None:
+                            commit_date = commit_date.replace(tzinfo=timezone.utc)
+                        
+                        # Only include branches created in the last 90 days
+                        if commit_date >= ninety_days_ago:
+                            branches.append(branch.name)
+                            
+                            # If we've found enough branches, we can stop
+                            if len(branches) >= 1000:  # GitHub API limit
+                                print("Warning: Reached maximum branch limit of 1000")
+                                break
+                    except Exception as e:
+                        print(f"Warning: Could not get commit date for branch {branch.name}: {str(e)}")
+                        continue
                 
-                # Only include branches created in the last 90 days
-                if commit_date >= ninety_days_ago:
-                    branches.append(branch.name)
+                # If we've reached the limit or no more branches, stop
+                if len(branches) >= 1000 or len(branch_page) < per_page:
+                    break
+                    
+                page += 1
+                
             except Exception as e:
-                print(f"Warning: Could not get commit date for branch {branch.name}: {str(e)}")
-                continue
+                print(f"Warning: Error getting branch page {page}: {str(e)}")
+                break
         
         print(f"Found {len(branches)} branches created in the last 90 days")
         return branches
