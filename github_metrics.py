@@ -63,7 +63,8 @@ def get_github_metrics(repo_name, token=None):
         
         # Initialize developer metrics
         dev_metrics = defaultdict(lambda: {
-            'lines_of_code': 0,
+            'lines_added': 0,
+            'lines_removed': 0,
             'commits': 0,
             'coding_days': set(),
             'commits_per_day': defaultdict(int),
@@ -123,21 +124,24 @@ def get_github_metrics(repo_name, token=None):
                         dev_metrics[author]['files_changed'].add(file.filename)
                         # Count lines added and removed for this file
                         if file.additions is not None:
-                            dev_metrics[author]['lines_of_code'] += file.additions
+                            dev_metrics[author]['lines_added'] += file.additions
                         if file.deletions is not None:
-                            dev_metrics[author]['lines_of_code'] -= file.deletions
+                            dev_metrics[author]['lines_removed'] += file.deletions
                 except Exception as e:
                     print(f"Error processing files in commit: {str(e)}")
                     continue
         
         # Print team-wide metrics
-        total_lines = sum(metrics['lines_of_code'] for metrics in dev_metrics.values())
+        total_lines_added = sum(metrics['lines_added'] for metrics in dev_metrics.values())
+        total_lines_removed = sum(metrics['lines_removed'] for metrics in dev_metrics.values())
         all_coding_days = set()
         for metrics in dev_metrics.values():
             all_coding_days.update(metrics['coding_days'])
         
         print(f"\nTeam Metrics for repository: {repo_name} (Last 7 days)")
-        print(f"Total lines of code changed: {total_lines}")
+        print(f"Total lines of code added: {total_lines_added}")
+        print(f"Total lines of code removed: {total_lines_removed}")
+        print(f"Net lines changed: {total_lines_added - total_lines_removed}")
         print(f"Total commits: {total_commits}")
         print(f"Total coding days: {len(all_coding_days)}")
         print(f"Number of active developers: {len(dev_metrics)}")
@@ -146,7 +150,9 @@ def get_github_metrics(repo_name, token=None):
         print("\nIndividual Developer Metrics (Last 7 days):")
         for author, metrics in dev_metrics.items():
             print(f"\nDeveloper: {author}")
-            print(f"Lines of code changed: {metrics['lines_of_code']}")
+            print(f"Lines of code added: {metrics['lines_added']}")
+            print(f"Lines of code removed: {metrics['lines_removed']}")
+            print(f"Net lines changed: {metrics['lines_added'] - metrics['lines_removed']}")
             print(f"Total commits: {metrics['commits']}")
             print(f"Coding days: {len(metrics['coding_days'])}")
             print(f"Files changed: {len(metrics['files_changed'])}")
