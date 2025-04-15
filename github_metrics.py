@@ -10,15 +10,10 @@ import json
 # Load environment variables
 load_dotenv()
 
-def get_branches(repo, start_date, end_date):
-    """Get all branches in the repository created in the last 90 days."""
+def get_branches(repo):
+    """Get all branches in the repository."""
     try:
-        # Calculate the date 90 days before the end date
-        ninety_days_ago = end_date - timedelta(days=90)
-        
-        # Ensure both dates are timezone-aware
-        if ninety_days_ago.tzinfo is None:
-            ninety_days_ago = ninety_days_ago.replace(tzinfo=timezone.utc)
+        print("Fetching branches from repository...")
         
         # Get branches using pagination
         branches = []
@@ -30,28 +25,23 @@ def get_branches(repo, start_date, end_date):
             try:
                 branch_page = list(repo.get_branches().get_page(page))
                 if not branch_page:
+                    print(f"No more branches found on page {page}")
                     break
+                
+                print(f"\nProcessing page {page} with {len(branch_page)} branches")
                 
                 for branch in branch_page:
                     try:
-                        # Get the first commit of the branch
-                        first_commit = branch.commit
-                        commit_date = first_commit.commit.author.date
+                        branch_name = branch.name
+                        print(f"Found branch: {branch_name}")
+                        branches.append(branch_name)
                         
-                        # Ensure commit date is timezone-aware
-                        if commit_date.tzinfo is None:
-                            commit_date = commit_date.replace(tzinfo=timezone.utc)
-                        
-                        # Only include branches created in the last 90 days
-                        if commit_date >= ninety_days_ago:
-                            branches.append(branch.name)
-                            
-                            # If we've found enough branches, we can stop
-                            if len(branches) >= 1000:  # GitHub API limit
-                                print("Warning: Reached maximum branch limit of 1000")
-                                break
+                        # If we've found enough branches, we can stop
+                        if len(branches) >= 1000:  # GitHub API limit
+                            print("Warning: Reached maximum branch limit of 1000")
+                            break
                     except Exception as e:
-                        print(f"Warning: Could not get commit date for branch {branch.name}: {str(e)}")
+                        print(f"Warning: Could not process branch: {str(e)}")
                         continue
                 
                 # If we've reached the limit or no more branches, stop
@@ -64,7 +54,7 @@ def get_branches(repo, start_date, end_date):
                 print(f"Warning: Error getting branch page {page}: {str(e)}")
                 break
         
-        print(f"Found {len(branches)} branches created in the last 90 days")
+        print(f"\nFound {len(branches)} branches")
         return branches
     except Exception as e:
         print(f"Error getting branches: {str(e)}")
@@ -143,7 +133,7 @@ def get_github_metrics(repo_name, token=None):
         print(f"\nAnalyzing metrics from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
         
         # Get branches created in the last 90 days
-        branches = get_branches(repo, start_date, end_date)
+        branches = get_branches(repo)
         
         # Create a mapping of commit SHA to branch name
         commit_branch_map = {}
@@ -297,9 +287,210 @@ def get_github_metrics(repo_name, token=None):
         print(f"Error: {str(e)}")
         sys.exit(1)
 
-if __name__ == "__main__":
-    # Get repository name from environment variable or use default
-    repo_name = os.getenv("GITHUB_REPO", "owner/repo")
-    token = os.getenv("GITHUB_TOKEN")
+def main():
+    # Load environment variables
+    load_dotenv()
     
-    get_github_metrics(repo_name, token) 
+    # Get GitHub token and repository from environment variables
+    token = os.getenv('GITHUB_TOKEN')
+    repo_name = os.getenv('GITHUB_REPO')
+    
+    if not token:
+        print("Error: GITHUB_TOKEN not found in .env file")
+        return
+    
+    if not repo_name:
+        print("Error: GITHUB_REPO not found in .env file")
+        return
+    
+    # Initialize GitHub client
+    g = Github(token)
+    
+    try:
+        # Test token validity and get repository
+        user = g.get_user()
+        print(f"Successfully authenticated as {user.login}")
+        
+        try:
+            repo = g.get_repo(repo_name)
+            print(f"Successfully accessed repository: {repo_name}")
+            print(f"Repository visibility: {repo.private and 'Private' or 'Public'}")
+            print(f"Default branch: {repo.default_branch}")
+        except Exception as e:
+            print(f"Error accessing repository: {str(e)}")
+            print("Please check if:")
+            print("1. The repository name is correct (format: owner/repo)")
+            print("2. You have access to the repository")
+            print("3. The token has the necessary permissions")
+            return
+        
+        # Set date range for analysis (last 7 days)
+        end_date = datetime.now(timezone.utc)
+        start_date = end_date - timedelta(days=7)
+        
+        print(f"\nAnalyzing repository from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+        
+        # Initialize metrics
+        team_metrics = {
+            'total_lines_added': 0,
+            'total_lines_removed': 0,
+            'total_commits': 0,
+            'total_coding_days': set(),
+            'active_developers': set()
+        }
+        
+        developer_metrics = defaultdict(lambda: {
+            'lines_added': 0,
+            'lines_removed': 0,
+            'commits': 0,
+            'coding_days': set(),
+            'files_changed': set(),
+            'pr_branch_commits': 0,
+            'master_commits': 0,
+            'first_commit': None,
+            'last_commit': None
+        })
+        
+        daily_activity = defaultdict(lambda: defaultdict(int))
+        
+        # Get commits from the default branch
+        try:
+            print(f"Getting commits from default branch ({repo.default_branch})")
+            commits = repo.get_commits(since=start_date, until=end_date)
+            
+            # Process each commit
+            for commit in commits:
+                # Get author information
+                author = None
+                if commit.author:
+                    author = commit.author.login
+                elif commit.commit.author:
+                    author = commit.commit.author.name
+                else:
+                    author = "Unknown"
+                
+                commit_date = commit.commit.author.date.date()
+                print(f"Processing commit {commit.sha[:7]} by {author} on {commit_date}")
+                
+                # Update team metrics
+                team_metrics['total_commits'] += 1
+                team_metrics['total_coding_days'].add(commit_date)
+                team_metrics['active_developers'].add(author)
+                
+                # Update developer metrics
+                dev_metrics = developer_metrics[author]
+                dev_metrics['commits'] += 1
+                dev_metrics['coding_days'].add(commit_date)
+                
+                # Track branch type (all commits are from default branch)
+                dev_metrics['master_commits'] += 1
+                
+                # Update first and last commit dates
+                if not dev_metrics['first_commit'] or commit_date < dev_metrics['first_commit']:
+                    dev_metrics['first_commit'] = commit_date
+                if not dev_metrics['last_commit'] or commit_date > dev_metrics['last_commit']:
+                    dev_metrics['last_commit'] = commit_date
+                
+                # Update daily activity
+                daily_activity[author][commit_date] += 1
+                
+                # Process files in commit
+                try:
+                    files = commit.files
+                    for file in files:
+                        # Skip image files
+                        if file.filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                            continue
+                        
+                        dev_metrics['files_changed'].add(file.filename)
+                        if file.additions is not None:
+                            dev_metrics['lines_added'] += file.additions
+                            team_metrics['total_lines_added'] += file.additions
+                        if file.deletions is not None:
+                            dev_metrics['lines_removed'] += file.deletions
+                            team_metrics['total_lines_removed'] += file.deletions
+                except Exception as e:
+                    print(f"Error processing files in commit: {str(e)}")
+                    continue
+                    
+        except Exception as e:
+            print(f"Error getting commits: {str(e)}")
+            return
+        
+        print(f"\nProcessed {team_metrics['total_commits']} commits")
+        
+        # Create output directory if it doesn't exist
+        os.makedirs('metrics_output', exist_ok=True)
+        
+        # Generate timestamp for filenames
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        # Save team metrics
+        team_data = {
+            'Metric': [
+                'Total Lines Added',
+                'Total Lines Removed',
+                'Net Lines Changed',
+                'Total Commits',
+                'Total Coding Days',
+                'Active Developers'
+            ],
+            'Value': [
+                team_metrics['total_lines_added'],
+                team_metrics['total_lines_removed'],
+                team_metrics['total_lines_added'] - team_metrics['total_lines_removed'],
+                team_metrics['total_commits'],
+                len(team_metrics['total_coding_days']),
+                len(team_metrics['active_developers'])
+            ]
+        }
+        pd.DataFrame(team_data).to_csv(f'metrics_output/team_metrics_{timestamp}.csv', index=False)
+        
+        # Save developer metrics
+        dev_data = []
+        for author, metrics in developer_metrics.items():
+            activity_days = (metrics['last_commit'] - metrics['first_commit']).days + 1 if metrics['first_commit'] and metrics['last_commit'] else 0
+            avg_commits = metrics['commits'] / activity_days if activity_days > 0 else 0
+            
+            dev_data.append({
+                'Developer': author,
+                'Lines Added': metrics['lines_added'],
+                'Lines Removed': metrics['lines_removed'],
+                'Net Lines Changed': metrics['lines_added'] - metrics['lines_removed'],
+                'Total Commits': metrics['commits'],
+                'PR Branch Commits': metrics['pr_branch_commits'],
+                'Master Commits': metrics['master_commits'],
+                'Coding Days': len(metrics['coding_days']),
+                'Files Changed': len(metrics['files_changed']),
+                'Avg Commits/Day': f"{avg_commits:.2f}",
+                'Activity Period': f"{metrics['first_commit']} to {metrics['last_commit']}" if metrics['first_commit'] and metrics['last_commit'] else "N/A"
+            })
+        pd.DataFrame(dev_data).to_csv(f'metrics_output/developer_metrics_{timestamp}.csv', index=False)
+        
+        # Save daily activity
+        daily_data = []
+        for author, daily_commits in daily_activity.items():
+            for date in sorted(daily_commits.keys()):
+                daily_data.append({
+                    'Developer': author,
+                    'Date': date,
+                    'Commits': daily_commits[date]
+                })
+        pd.DataFrame(daily_data).to_csv(f'metrics_output/daily_activity_{timestamp}.csv', index=False)
+        
+        print(f"\nMetrics have been saved to CSV files in the 'metrics_output' directory:")
+        print(f"- team_metrics_{timestamp}.csv")
+        print(f"- developer_metrics_{timestamp}.csv")
+        print(f"- daily_activity_{timestamp}.csv")
+        
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        if "Bad credentials" in str(e):
+            print("Please check your GitHub token in the .env file")
+        elif "rate limit exceeded" in str(e).lower():
+            print("GitHub API rate limit exceeded. Please try again later.")
+        else:
+            print("An unexpected error occurred. Please check your configuration and try again.")
+
+if __name__ == "__main__":
+    main() 
